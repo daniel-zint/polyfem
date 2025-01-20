@@ -15,6 +15,7 @@
 
 #include <igl/cat.h>
 #include <igl/Timer.h>
+#include <h5pp/h5pp.h>
 
 #include <set>
 
@@ -34,6 +35,61 @@ M (u^{t+1}_h - (u^t_h + \Delta t v^t_h)) - \frac{\Delta t^2} {2} A u^{t+1}_h
 
 namespace polyfem::solver
 {
+
+	namespace
+	{
+		void write_triplets_hack(const std::string &filename, const StiffnessMatrix &A)
+		{
+			h5pp::File triplets_file(filename);
+
+			std::vector<int64_t> rows(A.nonZeros());
+			std::vector<int64_t> cols(A.nonZeros());
+			std::vector<double> vals(A.nonZeros());
+			std::vector<int64_t> dims(2);
+			dims[0] = A.rows();
+			dims[1] = A.cols();
+
+			int64_t count = 0;
+			for (int k = 0; k < A.outerSize(); ++k)
+			{
+				for (StiffnessMatrix::InnerIterator it(A, k); it; ++it)
+				{
+					rows[count] = it.row();   // row index
+					cols[count] = it.col();   // col index (here it is equal to k)
+					vals[count] = it.value(); // value
+					++count;
+				}
+			}
+
+			triplets_file.writeDataset(rows, "rows");
+			triplets_file.writeDataset(cols, "cols");
+			triplets_file.writeDataset(vals, "vals");
+		}
+
+		StiffnessMatrix read_triplets_hack(const std::string &filename)
+		{
+			h5pp::File triplets_file(filename, h5pp::FileAccess::READONLY);
+			const auto rows = triplets_file.readDataset<std::vector<int64_t>>("rows");
+			const auto cols = triplets_file.readDataset<std::vector<int64_t>>("cols");
+			const auto vals = triplets_file.readDataset<std::vector<double>>("vals");
+
+			const auto dims = triplets_file.readDataset<std::vector<int64_t>>("dims");
+			const int64_t n = dims[0];
+			const int64_t m = dims[1];
+
+			std::vector<Eigen::Triplet<double>> triplets;
+			triplets.reserve(rows.size());
+			for (int64_t i = 0; i < triplets.size(); ++i)
+			{
+				triplets.emplace_back(rows[i], cols[i], vals[i]);
+			}
+
+			StiffnessMatrix A(n, m);
+			A.setFromTriplets(triplets.begin(), triplets.end());
+
+			return A;
+		}
+	} // namespace
 
 	namespace
 	{
@@ -527,6 +583,8 @@ namespace polyfem::solver
 
 			// write Q2_ and hessian to HDF5
 			// convert to triplets first
+			write_triplets_hack("hessian_triplets_out.h5", hessian);
+			write_triplets_hack("q2_triplets_out.h5", Q2_);
 
 			// call Python script (with `system()`)
 
